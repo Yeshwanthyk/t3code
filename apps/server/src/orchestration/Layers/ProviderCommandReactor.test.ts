@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 
 import {
   ModelSelection,
+  DEFAULT_SERVER_PROVIDER_CAPABILITIES,
   ProviderRuntimeEvent,
   ProviderSession,
   ProviderDriverKind,
@@ -145,6 +146,9 @@ describe("ProviderCommandReactor", () => {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
+    readonly allowedRuntimeModes?: ReadonlyArray<
+      "approval-required" | "auto-accept-edits" | "full-access"
+    >;
     readonly requiresNewThreadForModelChange?: boolean;
     readonly startSessionEffect?: (
       session: ProviderSession,
@@ -314,6 +318,10 @@ describe("ProviderCommandReactor", () => {
       listSessions: () => Effect.succeed(runtimeSessions),
       getCapabilities: (_provider) =>
         Effect.succeed({
+          ...DEFAULT_SERVER_PROVIDER_CAPABILITIES,
+          allowedRuntimeModes:
+            input?.allowedRuntimeModes ?? DEFAULT_SERVER_PROVIDER_CAPABILITIES.allowedRuntimeModes,
+          inSessionModelSwitching: input?.sessionModelSwitch !== "unsupported",
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
         }),
       getInstanceInfo: (instanceId) => {
@@ -586,6 +594,49 @@ describe("ProviderCommandReactor", () => {
       expect(thread?.session?.lastError).toBeNull();
     }),
   );
+
+  it("rejects an unsupported runtime mode before starting a provider session", async () => {
+    const harness = await createHarness({ allowedRuntimeModes: ["full-access"] });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-unsupported-runtime-mode"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-unsupported-runtime-mode"),
+          role: "user",
+          text: "don't start this provider",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return (
+        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+        false
+      );
+    });
+
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toMatchObject({
+      payload: {
+        detail: expect.stringContaining("does not support runtime mode 'approval-required'"),
+      },
+    });
+  });
 
   it("generates a thread title on the first turn", async () => {
     const harness = await createHarness();

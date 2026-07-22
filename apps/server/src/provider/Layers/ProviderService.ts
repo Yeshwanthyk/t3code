@@ -46,7 +46,10 @@ import {
   withMetrics,
 } from "../../observability/Metrics.ts";
 import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
-import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import {
+  resolveProviderAdapterCapabilities,
+  type ProviderAdapterShape,
+} from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
@@ -365,6 +368,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     });
     return yield* Effect.gen(function* () {
       const adapter = yield* registry.getByInstance(bindingInstanceId);
+      const capabilities = resolveProviderAdapterCapabilities(adapter.capabilities);
+      const runtimeMode = input.binding.runtimeMode ?? "full-access";
+      if (!capabilities.allowedRuntimeModes.includes(runtimeMode)) {
+        return yield* toValidationError(
+          input.operation,
+          `Provider '${adapter.provider}' does not support runtime mode '${runtimeMode}'.`,
+        );
+      }
       const hasResumeCursor =
         input.binding.resumeCursor !== null && input.binding.resumeCursor !== undefined;
       const hasActiveSession = yield* adapter.hasSession(input.binding.threadId);
@@ -406,7 +417,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           ...(persistedCwd ? { cwd: persistedCwd } : {}),
           ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
           ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
-          runtimeMode: input.binding.runtimeMode ?? "full-access",
+          runtimeMode,
         })
         .pipe(Effect.onError(() => clearMcpSession(input.binding.threadId)));
       if (resumed.provider !== adapter.provider) {
@@ -590,6 +601,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.cwd.effective": effectiveCwd ?? "",
         });
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
+        const capabilities = resolveProviderAdapterCapabilities(adapter.capabilities);
+        if (!capabilities.allowedRuntimeModes.includes(input.runtimeMode)) {
+          return yield* toValidationError(
+            "ProviderService.startSession",
+            `Provider '${adapter.provider}' does not support runtime mode '${input.runtimeMode}'.`,
+          );
+        }
         yield* prepareMcpSession(threadId, resolvedInstanceId);
         const session = yield* adapter
           .startSession({
@@ -962,7 +980,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   );
 
   const getCapabilities: ProviderServiceMethod<"getCapabilities"> = (instanceId) =>
-    registry.getByInstance(instanceId).pipe(Effect.map((adapter) => adapter.capabilities));
+    registry
+      .getByInstance(instanceId)
+      .pipe(Effect.map((adapter) => resolveProviderAdapterCapabilities(adapter.capabilities)));
 
   const getInstanceInfo: ProviderServiceMethod<"getInstanceInfo"> = (instanceId) =>
     registry.getInstanceInfo(instanceId);
@@ -980,11 +1000,27 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     }
     let metricProvider = "unknown";
     return yield* Effect.gen(function* () {
-      const routed = yield* resolveRoutableSession({
+      const routedBeforeRecovery = yield* resolveRoutableSession({
         threadId: input.threadId,
         operation: "ProviderService.rollbackConversation",
-        allowRecovery: true,
+        allowRecovery: false,
       });
+      const capabilities = resolveProviderAdapterCapabilities(
+        routedBeforeRecovery.adapter.capabilities,
+      );
+      if (!capabilities.rollback) {
+        return yield* toValidationError(
+          "ProviderService.rollbackConversation",
+          `Provider '${routedBeforeRecovery.adapter.provider}' does not support rollback.`,
+        );
+      }
+      const routed = routedBeforeRecovery.isActive
+        ? routedBeforeRecovery
+        : yield* resolveRoutableSession({
+            threadId: input.threadId,
+            operation: "ProviderService.rollbackConversation",
+            allowRecovery: true,
+          });
       metricProvider = routed.adapter.provider;
       yield* Effect.annotateCurrentSpan({
         "provider.operation": "rollback-conversation",

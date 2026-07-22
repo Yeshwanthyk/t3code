@@ -12,6 +12,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
+  DEFAULT_SERVER_PROVIDER_CAPABILITIES,
   EventId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -42,7 +43,10 @@ import {
   ProviderValidationError,
   type ProviderAdapterError,
 } from "../Errors.ts";
-import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import type {
+  ProviderAdapterCapabilities,
+  ProviderAdapterShape,
+} from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
@@ -84,7 +88,10 @@ type LegacyProviderRuntimeEvent = {
   readonly [key: string]: unknown;
 };
 
-function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
+function makeFakeCodexAdapter(
+  provider: ProviderDriverKind = CODEX_DRIVER,
+  capabilities: ProviderAdapterCapabilities = { sessionModelSwitch: "in-session" },
+) {
   const sessions = new Map<ThreadId, ProviderSession>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
 
@@ -201,9 +208,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
 
   const adapter: ProviderAdapterShape<ProviderAdapterError> = {
     provider,
-    capabilities: {
-      sessionModelSwitch: "in-session",
-    },
+    capabilities,
     startSession,
     sendTurn,
     interruptTurn,
@@ -267,8 +272,10 @@ const hasMetricSnapshot = (
       Object.entries(attributes).every(([key, value]) => snapshot.attributes?.[key] === value),
   );
 
-function makeProviderServiceLayer() {
-  const codex = makeFakeCodexAdapter();
+function makeProviderServiceLayer(input?: {
+  readonly codexCapabilities?: ProviderAdapterCapabilities;
+}) {
+  const codex = makeFakeCodexAdapter(CODEX_DRIVER, input?.codexCapabilities);
   const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
   const cursor = makeFakeCodexAdapter(CURSOR_DRIVER);
   const registry = makeAdapterRegistryMock({
@@ -584,6 +591,54 @@ it.effect("ProviderServiceLive rejects new sessions for disabled custom instance
 );
 
 const routing = makeProviderServiceLayer();
+const restricted = makeProviderServiceLayer({
+  codexCapabilities: {
+    ...DEFAULT_SERVER_PROVIDER_CAPABILITIES,
+    allowedRuntimeModes: ["full-access"],
+    rollback: false,
+    sessionModelSwitch: "in-session",
+  },
+});
+
+restricted.layer("ProviderServiceLive capability enforcement", (it) => {
+  it.effect("rejects an unsupported runtime mode before starting the adapter", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const failure = yield* Effect.flip(
+        provider.startSession(asThreadId("thread-restricted-mode"), {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId: asThreadId("thread-restricted-mode"),
+          runtimeMode: "approval-required",
+        }),
+      );
+
+      assert.instanceOf(failure, ProviderValidationError);
+      assert.include(failure.issue, "does not support runtime mode 'approval-required'");
+      assert.equal(restricted.codex.startSession.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("fails closed for unsupported rollback without invoking the adapter", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const session = yield* provider.startSession(asThreadId("thread-no-rollback"), {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId: asThreadId("thread-no-rollback"),
+        runtimeMode: "full-access",
+      });
+
+      const failure = yield* Effect.flip(
+        provider.rollbackConversation({ threadId: session.threadId, numTurns: 1 }),
+      );
+
+      assert.instanceOf(failure, ProviderValidationError);
+      assert.include(failure.issue, "does not support rollback");
+      assert.equal(restricted.codex.rollbackThread.mock.calls.length, 0);
+    }),
+  );
+});
 
 it.effect("ProviderServiceLive writes canonical events to the emitting thread segment", () =>
   Effect.gen(function* () {

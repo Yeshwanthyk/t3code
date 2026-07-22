@@ -7,6 +7,7 @@
  *
  * @module ProviderAdapter
  */
+import { DEFAULT_SERVER_PROVIDER_CAPABILITIES } from "@t3tools/contracts";
 import type {
   ApprovalRequestId,
   ProviderApprovalDecision,
@@ -18,6 +19,7 @@ import type {
   ProviderSessionStartInput,
   ThreadId,
   ProviderTurnStartResult,
+  ServerProviderCapabilities,
   TurnId,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
@@ -25,11 +27,34 @@ import type * as Stream from "effect/Stream";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "unsupported";
 
-export interface ProviderAdapterCapabilities {
+interface LegacyProviderAdapterCapabilities {
   /**
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+}
+
+export interface DeclaredProviderAdapterCapabilities extends ServerProviderCapabilities {
+  readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+}
+
+/**
+ * Existing adapters only declared model switching. Keep accepting that shape
+ * while new drivers publish the complete trusted descriptor.
+ */
+export type ProviderAdapterCapabilities =
+  | LegacyProviderAdapterCapabilities
+  | DeclaredProviderAdapterCapabilities;
+
+export function resolveProviderAdapterCapabilities(
+  capabilities: ProviderAdapterCapabilities,
+): DeclaredProviderAdapterCapabilities {
+  const defaults = DEFAULT_SERVER_PROVIDER_CAPABILITIES;
+  return {
+    ...defaults,
+    inSessionModelSwitching: capabilities.sessionModelSwitch === "in-session",
+    ...capabilities,
+  };
 }
 
 export interface ProviderThreadTurnSnapshot {

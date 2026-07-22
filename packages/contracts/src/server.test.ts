@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ServerProvider } from "./server.ts";
+import { resolveServerProviderCapabilities, ServerProvider } from "./server.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 
@@ -23,8 +23,83 @@ describe("ServerProvider", () => {
 
     expect(parsed.slashCommands).toEqual([]);
     expect(parsed.skills).toEqual([]);
+    expect(resolveServerProviderCapabilities(parsed.capabilities)).toEqual({
+      allowedRuntimeModes: ["approval-required", "auto-accept-edits", "full-access"],
+      resumeReplay: true,
+      imageInput: true,
+      inSessionModelSwitching: true,
+      thinkingLevelSwitching: true,
+      steering: true,
+      followUpQueue: true,
+      extensionUiRequests: true,
+      approvals: true,
+      userInput: true,
+      subagentLineage: false,
+      workflowArtifacts: false,
+      rollback: true,
+      fork: true,
+    });
     expect(parsed.versionAdvisory).toBeUndefined();
     expect(parsed.updateState).toBeUndefined();
+  });
+
+  it("decodes an explicit fail-closed provider capability descriptor", () => {
+    const parsed = decodeServerProvider({
+      instanceId: "pi",
+      driver: "pi",
+      enabled: true,
+      installed: true,
+      version: "0.80.10",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-07-22T00:00:00.000Z",
+      models: [],
+      capabilities: {
+        allowedRuntimeModes: ["full-access"],
+        resumeReplay: true,
+        imageInput: true,
+        inSessionModelSwitching: true,
+        thinkingLevelSwitching: true,
+        steering: true,
+        followUpQueue: true,
+        extensionUiRequests: false,
+        approvals: false,
+        userInput: false,
+        subagentLineage: false,
+        workflowArtifacts: false,
+        rollback: false,
+        fork: false,
+      },
+    });
+
+    const capabilities = resolveServerProviderCapabilities(parsed.capabilities);
+    expect(capabilities.allowedRuntimeModes).toEqual(["full-access"]);
+    expect(capabilities.approvals).toBe(false);
+    expect(capabilities.rollback).toBe(false);
+  });
+
+  it("defaults fields omitted by an older capability descriptor", () => {
+    const parsed = decodeServerProvider({
+      instanceId: "pi",
+      driver: "pi",
+      enabled: true,
+      installed: true,
+      version: "0.80.10",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-07-22T00:00:00.000Z",
+      models: [],
+      capabilities: {
+        allowedRuntimeModes: ["full-access"],
+        rollback: false,
+      },
+    });
+
+    const capabilities = resolveServerProviderCapabilities(parsed.capabilities);
+    expect(capabilities.allowedRuntimeModes).toEqual(["full-access"]);
+    expect(capabilities.rollback).toBe(false);
+    expect(capabilities.resumeReplay).toBe(true);
+    expect(capabilities.workflowArtifacts).toBe(false);
   });
 
   it("defaults one-click update support when decoding older advisory snapshots", () => {

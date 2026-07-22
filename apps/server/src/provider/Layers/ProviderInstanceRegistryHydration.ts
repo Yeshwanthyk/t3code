@@ -53,6 +53,7 @@ import * as Stream from "effect/Stream";
 
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "../builtInDrivers.ts";
+import type { AnyProviderDriver } from "../ProviderDriver.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderInstanceRegistryMutator } from "../Services/ProviderInstanceRegistryMutator.ts";
 import { ProviderInstanceRegistryMutableLayer } from "./ProviderInstanceRegistryLive.ts";
@@ -72,10 +73,13 @@ import { ProviderInstanceRegistryMutableLayer } from "./ProviderInstanceRegistry
  */
 export const deriveProviderInstanceConfigMap = (
   settings: ServerSettings,
+  drivers: ReadonlyArray<
+    Pick<AnyProviderDriver, "driverKind" | "defaultConfig">
+  > = BUILT_IN_DRIVERS,
 ): ProviderInstanceConfigMap => {
   const merged: Record<string, ProviderInstanceConfig> = { ...settings.providerInstances };
 
-  for (const driver of BUILT_IN_DRIVERS) {
+  for (const driver of drivers) {
     const instanceId = defaultInstanceIdForDriver(driver.driverKind);
     if (instanceId in merged) {
       // Explicit `providerInstances` entry for this slot — user-authored
@@ -83,20 +87,15 @@ export const deriveProviderInstanceConfigMap = (
       continue;
     }
 
-    // Only built-in drivers have a legacy mirror; the registry's
-    // `providers` struct is keyed on the same literal slug as
-    // `driverKind`. Access is dynamic (the driver kind is a branded string),
-    // but it's constrained to `keyof settings.providers` by the union of
-    // built-in driver kinds.
+    // Existing built-ins use their legacy mirror when one exists. New
+    // drivers have no fixed `settings.providers.<kind>` slot, so hydrate
+    // their default instance from the driver's own default config instead.
     const legacyKey = driver.driverKind as keyof ServerSettings["providers"];
     const legacyConfig = settings.providers[legacyKey];
-    if (legacyConfig === undefined) {
-      continue;
-    }
 
     merged[instanceId] = {
       driver: driver.driverKind,
-      config: legacyConfig,
+      config: legacyConfig ?? driver.defaultConfig(),
     };
   }
 

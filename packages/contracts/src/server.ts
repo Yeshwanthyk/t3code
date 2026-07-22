@@ -20,6 +20,7 @@ import { EditorId } from "./editor.ts";
 import { ModelCapabilities } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerSettings } from "./settings.ts";
+import { RuntimeMode } from "./orchestration.ts";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -117,6 +118,57 @@ export const ServerProviderContinuation = Schema.Struct({
 });
 export type ServerProviderContinuation = typeof ServerProviderContinuation.Type;
 
+/**
+ * Trusted provider feature boundary shared by server dispatch and clients.
+ *
+ * Older provider snapshots predate this descriptor, so the field remains
+ * optional and `resolveServerProviderCapabilities` preserves their established
+ * behavior. New drivers should publish an explicit descriptor and opt out of
+ * every operation they cannot honor.
+ */
+export const DEFAULT_SERVER_PROVIDER_CAPABILITIES = {
+  allowedRuntimeModes: ["approval-required", "auto-accept-edits", "full-access"],
+  resumeReplay: true,
+  imageInput: true,
+  inSessionModelSwitching: true,
+  thinkingLevelSwitching: true,
+  steering: true,
+  followUpQueue: true,
+  extensionUiRequests: true,
+  approvals: true,
+  userInput: true,
+  subagentLineage: false,
+  workflowArtifacts: false,
+  rollback: true,
+  fork: true,
+} as const;
+
+export const ServerProviderCapabilities = Schema.Struct({
+  allowedRuntimeModes: Schema.Array(RuntimeMode).pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(DEFAULT_SERVER_PROVIDER_CAPABILITIES.allowedRuntimeModes),
+    ),
+  ),
+  resumeReplay: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  imageInput: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  inSessionModelSwitching: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  thinkingLevelSwitching: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  steering: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  followUpQueue: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  extensionUiRequests: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  approvals: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  userInput: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  subagentLineage: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  workflowArtifacts: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  rollback: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  fork: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type ServerProviderCapabilities = typeof ServerProviderCapabilities.Type;
+
+export const resolveServerProviderCapabilities = (
+  capabilities: ServerProviderCapabilities | undefined,
+): ServerProviderCapabilities => capabilities ?? DEFAULT_SERVER_PROVIDER_CAPABILITIES;
+
 export const ServerProviderVersionAdvisoryStatus = Schema.Literals([
   "unknown",
   "current",
@@ -165,6 +217,7 @@ export const ServerProvider = Schema.Struct({
   accentColor: Schema.optional(TrimmedNonEmptyString),
   badgeLabel: Schema.optional(TrimmedNonEmptyString),
   continuation: Schema.optional(ServerProviderContinuation),
+  capabilities: Schema.optional(ServerProviderCapabilities),
   showInteractionModeToggle: Schema.optional(Schema.Boolean),
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   enabled: Schema.Boolean,
