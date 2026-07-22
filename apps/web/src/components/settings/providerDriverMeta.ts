@@ -37,8 +37,20 @@ const PiSettings = makeProviderSettingsSchema(
         providerSettingsForm: { placeholder: "pi", clearWhenEmpty: "omit" },
       }),
     ),
+    agentDir: Schema.optional(
+      Schema.String.pipe(
+        Schema.annotateKey({
+          title: "Agent directory",
+          description: "Pi agent directory containing provider-scoped workflow artifacts.",
+          providerSettingsForm: {
+            placeholder: "~/.pi/agent",
+            clearWhenEmpty: "omit",
+          },
+        }),
+      ),
+    ),
   },
-  { order: ["binaryPath"] },
+  { order: ["binaryPath", "agentDir"] },
 );
 
 /**

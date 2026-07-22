@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 export const PiSettings = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   binaryPath: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed("pi"))),
+  agentDir: Schema.optional(Schema.String),
 });
 
 export type PiSettings = typeof PiSettings.Type;

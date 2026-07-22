@@ -41,7 +41,10 @@ describe("ProviderSettingsForm helpers", () => {
     const pi = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("pi")];
 
     expect(pi?.label).toBe("Pi");
-    expect(deriveProviderSettingsFields(pi!).map((field) => field.key)).toEqual(["binaryPath"]);
+    expect(deriveProviderSettingsFields(pi!).map((field) => field.key)).toEqual([
+      "binaryPath",
+      "agentDir",
+    ]);
   });
 
   it("preserves unknown config keys while omitting empty configurable fields", () => {

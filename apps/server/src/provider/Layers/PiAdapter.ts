@@ -1,8 +1,15 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import {
+  ApprovalRequestId,
   EventId,
+  type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
   type ProviderSendTurnInput,
   type ProviderSession,
+  type ProviderUserInputAnswers,
   ProviderDriverKind,
   ProviderInstanceId,
   RuntimeItemId,
@@ -32,6 +39,14 @@ import {
 } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import type { PiSettings } from "../pi/PiSettings.ts";
+import {
+  piCancelledExtensionUiResponse,
+  piConfirmationResponse,
+  piExtensionUiRuntimeRequestId,
+  piUserInputResponse,
+  projectPiExtensionUiDialog,
+  type PiPendingExtensionUiRequest,
+} from "../pi/PiExtensionUiRequests.ts";
 import type { PiRpcAgentEvent, PiRpcEvent, PiRpcImage } from "../pi/PiRpcProtocol.ts";
 import { decodePiResumeCursor } from "../pi/PiRpcProtocol.ts";
 import {
@@ -39,6 +54,11 @@ import {
   parsePiModelSlug,
   type PiSessionRuntime,
 } from "../pi/PiSessionRuntime.ts";
+import {
+  projectPiWorkflowArtifactChange,
+  projectPiWorkflowChanges,
+} from "../pi/PiWorkflowProjection.ts";
+import { makeScopedPiWorkflowWatcher, type PiWorkflowScanResult } from "../pi/PiWorkflowWatcher.ts";
 import { PI_PROVIDER_CAPABILITIES } from "./PiProvider.ts";
 import * as Result from "effect/Result";
 
@@ -59,9 +79,18 @@ interface PiSessionContext {
   observedTurnError: "aborted" | "error" | undefined;
   readonly startedItems: Set<string>;
   readonly textByItem: Map<string, string>;
+  readonly pendingExtensionUi: Map<ApprovalRequestId, PiPendingExtensionUiState>;
+  readonly settledExtensionUi: Set<string>;
   modelSupportsImages: boolean;
+  closing: boolean;
   eventFiber: Fiber.Fiber<void, never> | undefined;
   exitFiber: Fiber.Fiber<void, never> | undefined;
+}
+
+interface PiPendingExtensionUiState {
+  readonly pending: PiPendingExtensionUiRequest;
+  readonly turnId: TurnId | undefined;
+  timeoutFiber: Fiber.Fiber<void, never> | undefined;
 }
 
 export interface PiReplayContent {
@@ -119,7 +148,13 @@ export function makePiAdapter(settings: PiSettings, options?: PiAdapterOptions) 
     const crypto = yield* Crypto.Crypto;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const events = yield* Queue.unbounded<ProviderRuntimeEvent>();
+    const workflowScans = yield* Queue.unbounded<PiWorkflowScanResult>();
     const sessions = new Map<ThreadId, PiSessionContext>();
+    const piAgentDir =
+      settings.agentDir?.trim() ||
+      options?.environment?.PI_CODING_AGENT_DIR?.trim() ||
+      process.env.PI_CODING_AGENT_DIR?.trim() ||
+      NodePath.join(NodeOS.homedir(), ".pi", "agent");
 
     const uuid = crypto.randomUUIDv4.pipe(
       Effect.mapError(
@@ -150,8 +185,168 @@ export function makePiAdapter(settings: PiSettings, options?: PiAdapterOptions) 
       );
     const emit = (event: ProviderRuntimeEvent) => Queue.offer(events, event).pipe(Effect.asVoid);
 
+    const nativeSessionId = (context: PiSessionContext): string | undefined => {
+      const decoded = decodePiResumeCursor(context.session.resumeCursor);
+      return Result.isSuccess(decoded) ? decoded.success.sessionId : undefined;
+    };
+
+    const resolveWorkflowThreadId = (input: {
+      readonly providerInstanceId: string;
+      readonly nativeSessionId: string;
+    }): ThreadId | undefined => {
+      if (input.providerInstanceId !== boundInstanceId) return undefined;
+      for (const context of sessions.values()) {
+        if (nativeSessionId(context) === input.nativeSessionId) return context.session.threadId;
+      }
+      return undefined;
+    };
+
+    const workflowWatcher = yield* makeScopedPiWorkflowWatcher({
+      providerInstanceId: boundInstanceId,
+      piAgentDir,
+    });
+    workflowWatcher.start((scan) => {
+      Queue.offerUnsafe(workflowScans, scan);
+    });
+    yield* Stream.runForEach(Stream.fromQueue(workflowScans), (scan) => {
+      const projected = projectPiWorkflowChanges(scan.changes, resolveWorkflowThreadId);
+      return Effect.forEach(projected.events, emit, { concurrency: 1, discard: true }).pipe(
+        Effect.tap(() =>
+          Effect.forEach(
+            scan.issues,
+            (issue) =>
+              Effect.logWarning("Ignored invalid Pi workflow artifact update", {
+                providerInstanceId: boundInstanceId,
+                runId: issue.runId,
+                issue: issue.code,
+                detail: issue.message,
+              }),
+            { concurrency: 1, discard: true },
+          ),
+        ),
+      );
+    }).pipe(Effect.forkScoped);
+
+    const extensionUiEventBase = Effect.fn("piExtensionUiEventBase")(function* (
+      context: PiSessionContext,
+      nativeRequestId: string,
+      phase: "opened" | "resolved",
+      raw: unknown,
+      turnId: TurnId | undefined,
+    ) {
+      const createdAt = DateTime.formatIso(yield* DateTime.now);
+      return {
+        eventId: EventId.make(
+          `pi:${context.session.threadId}:extension-ui:${nativeRequestId}:${phase}`,
+        ),
+        provider: PROVIDER,
+        providerInstanceId: boundInstanceId,
+        threadId: context.session.threadId,
+        createdAt,
+        ...(turnId ? { turnId } : {}),
+        requestId: piExtensionUiRuntimeRequestId(nativeRequestId),
+        raw: { source: "pi.rpc" as const, method: `extension_ui/${phase}`, payload: raw },
+      };
+    });
+
+    const emitExtensionUiResolved = Effect.fn("emitPiExtensionUiResolved")(function* (
+      context: PiSessionContext,
+      state: PiPendingExtensionUiState,
+      resolution:
+        | { readonly kind: "approval"; readonly decision: ProviderApprovalDecision }
+        | {
+            readonly kind: "user-input";
+            readonly answers: ProviderUserInputAnswers;
+          }
+        | { readonly kind: "cancelled"; readonly reason: string },
+    ) {
+      const { pending } = state;
+      const base = yield* extensionUiEventBase(
+        context,
+        pending.nativeRequestId,
+        "resolved",
+        { method: pending.request.method, resolution },
+        state.turnId,
+      );
+      if (pending.kind === "approval") {
+        const decision = resolution.kind === "approval" ? resolution.decision : "cancel";
+        yield* emit({
+          ...base,
+          type: "request.resolved",
+          payload: {
+            requestType: "unknown",
+            decision,
+            resolution,
+          },
+        });
+        return;
+      }
+      const answers = resolution.kind === "user-input" ? resolution.answers : {};
+      yield* emit({
+        ...base,
+        type: "user-input.resolved",
+        payload: { answers },
+      });
+    });
+
+    const settleExtensionUiState = Effect.fn("settlePiExtensionUiState")(function* (
+      context: PiSessionContext,
+      state: PiPendingExtensionUiState,
+      resolution:
+        | { readonly kind: "approval"; readonly decision: ProviderApprovalDecision }
+        | { readonly kind: "user-input"; readonly answers: ProviderUserInputAnswers }
+        | { readonly kind: "cancelled"; readonly reason: string },
+      sendResponse: boolean,
+    ) {
+      if (context.pendingExtensionUi.get(state.pending.requestId) !== state) return false;
+      context.pendingExtensionUi.delete(state.pending.requestId);
+      context.settledExtensionUi.add(state.pending.nativeRequestId);
+      if (state.timeoutFiber) yield* Fiber.interrupt(state.timeoutFiber);
+      if (sendResponse) {
+        const response =
+          resolution.kind === "approval" && state.pending.kind === "approval"
+            ? piConfirmationResponse(state.pending, resolution.decision)
+            : resolution.kind === "user-input" && state.pending.kind === "user-input"
+              ? piUserInputResponse(state.pending, resolution.answers)
+              : piCancelledExtensionUiResponse(state.pending);
+        if (response) {
+          yield* context.runtime.process.respondToExtensionUi(response).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "extension_ui_response",
+                  detail: cause.message,
+                  cause,
+                }),
+            ),
+          );
+        }
+      }
+      yield* emitExtensionUiResolved(context, state, resolution);
+      return true;
+    });
+
+    const cancelPendingExtensionUi = Effect.fn("cancelPendingPiExtensionUi")(function* (
+      context: PiSessionContext,
+      reason: string,
+      sendResponse: boolean,
+    ) {
+      yield* Effect.forEach(
+        [...context.pendingExtensionUi.values()],
+        (state) =>
+          settleExtensionUiState(context, state, { kind: "cancelled", reason }, sendResponse).pipe(
+            Effect.catch(() => Effect.void),
+          ),
+        { concurrency: 1, discard: true },
+      );
+    });
+
     const closeContext = Effect.fn("closePiContext")(function* (context: PiSessionContext) {
+      if (context.closing) return;
+      context.closing = true;
       sessions.delete(context.session.threadId);
+      yield* cancelPendingExtensionUi(context, "Pi session closed.", true);
       yield* Scope.close(context.scope, Exit.void).pipe(Effect.ignore);
     });
 
@@ -419,14 +614,83 @@ export function makePiAdapter(settings: PiSettings, options?: PiAdapterOptions) 
       event: PiRpcEvent,
     ) {
       if (event.type === "extension_ui_request") {
-        yield* context.runtime.process
-          .respondToExtensionUi({ type: "extension_ui_response", id: event.id, cancelled: true })
-          .pipe(Effect.ignore);
-        yield* emit({
-          ...(yield* eventBase(context, event)),
-          type: "runtime.warning",
-          payload: { message: `Pi extension UI request '${event.method}' is unsupported.` },
-        });
+        if (
+          event.method === "notify" ||
+          event.method === "setStatus" ||
+          event.method === "setWidget" ||
+          event.method === "setTitle" ||
+          event.method === "set_editor_text"
+        ) {
+          // Pi documents these as fire-and-forget. Sending a dialog response is a
+          // protocol violation, so fail closed by ignoring the presentation
+          // mutation and making that decision visible to the canonical stream.
+          yield* emit({
+            ...(yield* eventBase(context, event)),
+            type: "runtime.warning",
+            payload: {
+              message: `Pi extension UI operation '${event.method}' was ignored because T3 has no trusted presentation surface for it.`,
+            },
+          });
+          return;
+        }
+
+        const projection = projectPiExtensionUiDialog(event);
+        const existing = context.pendingExtensionUi.get(projection.pending.requestId);
+        if (
+          existing ||
+          context.settledExtensionUi.has(projection.pending.nativeRequestId) ||
+          context.closing
+        ) {
+          yield* emit({
+            ...(yield* eventBase(context, event)),
+            type: "runtime.warning",
+            payload: {
+              message: `Duplicate or closing Pi extension UI request '${event.id}' was ignored.`,
+            },
+          });
+          return;
+        }
+
+        const state: PiPendingExtensionUiState = {
+          pending: projection.pending,
+          turnId: context.activeTurnId,
+          timeoutFiber: undefined,
+        };
+        context.pendingExtensionUi.set(projection.pending.requestId, state);
+        const base = yield* extensionUiEventBase(
+          context,
+          projection.pending.nativeRequestId,
+          "opened",
+          event,
+          state.turnId,
+        );
+        yield* emit(
+          projection.kind === "approval"
+            ? { ...base, type: "request.opened", payload: projection.payload }
+            : { ...base, type: "user-input.requested", payload: projection.payload },
+        );
+
+        const timeout = "timeout" in event ? event.timeout : undefined;
+        if (typeof timeout === "number" && Number.isFinite(timeout) && timeout >= 0) {
+          state.timeoutFiber = yield* Effect.sleep(`${timeout} millis`).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                state.timeoutFiber = undefined;
+              }),
+            ),
+            Effect.andThen(
+              settleExtensionUiState(
+                context,
+                state,
+                { kind: "cancelled", reason: "Pi extension UI request timed out." },
+                false,
+              ),
+            ),
+            Effect.asVoid,
+            Effect.catch(() => Effect.void),
+            Effect.forkIn(context.scope),
+          );
+        }
         return;
       }
       yield* handleAgentEvent(context, event);
@@ -567,11 +831,30 @@ export function makePiAdapter(settings: PiSettings, options?: PiAdapterOptions) 
         observedTurnError: undefined,
         startedItems: new Set(),
         textByItem: new Map(),
+        pendingExtensionUi: new Map(),
+        settledExtensionUi: new Set(),
         modelSupportsImages: effectiveModel?.input.includes("image") === true,
+        closing: false,
         eventFiber: undefined,
         exitFiber: undefined,
       };
       sessions.set(input.threadId, context);
+      const currentNativeSessionId = nativeSessionId(context);
+      if (currentNativeSessionId) {
+        yield* Effect.forEach(
+          workflowWatcher
+            .list()
+            .filter((snapshot) => snapshot.sessionId === currentNativeSessionId)
+            .flatMap((snapshot) =>
+              projectPiWorkflowArtifactChange({
+                current: snapshot,
+                threadId: input.threadId,
+              }),
+            ),
+          emit,
+          { concurrency: 1, discard: true },
+        );
+      }
       context.eventFiber = yield* Stream.runForEach(runtime.events, (event) =>
         handleEvent(context, event).pipe(Effect.catch(() => Effect.void)),
       ).pipe(Effect.forkIn(sessionScope));
@@ -579,6 +862,13 @@ export function makePiAdapter(settings: PiSettings, options?: PiAdapterOptions) 
         Effect.flatMap(({ code, stderr }) =>
           Effect.gen(function* () {
             if (sessions.get(input.threadId) !== context) return;
+            context.closing = true;
+            sessions.delete(input.threadId);
+            yield* cancelPendingExtensionUi(
+              context,
+              "Pi RPC process exited before the request was answered.",
+              false,
+            );
             const updatedAt = DateTime.formatIso(yield* DateTime.now);
             context.session = {
               ...context.session,
@@ -595,6 +885,9 @@ export function makePiAdapter(settings: PiSettings, options?: PiAdapterOptions) 
                 exitKind: "error",
               },
             });
+            // Closing a scope from one of its own child fibers can wait on that
+            // fiber. Let a detached cleanup fiber close it after this handler exits.
+            yield* Scope.close(context.scope, Exit.void).pipe(Effect.forkDetach);
           }),
         ),
         Effect.catch(() => Effect.void),
@@ -781,20 +1074,52 @@ export function makePiAdapter(settings: PiSettings, options?: PiAdapterOptions) 
       );
     });
 
-    const unsupportedRequest = (operation: string) =>
-      Effect.fail(
-        new ProviderAdapterValidationError({
-          provider: PROVIDER,
-          operation,
-          issue: "Pi extension requests aren't supported in this release.",
-        }),
-      );
+    const respondToRequest: ProviderAdapterShape<ProviderAdapterError>["respondToRequest"] =
+      Effect.fn("PiAdapter.respondToRequest")(function* (threadId, requestId, decision) {
+        const context = yield* requireContext(threadId);
+        const state = context.pendingExtensionUi.get(requestId);
+        if (!state || state.pending.kind !== "approval") {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "extension_ui_response",
+            detail: `Unknown pending Pi confirmation request: ${requestId}`,
+          });
+        }
+        yield* settleExtensionUiState(context, state, { kind: "approval", decision }, true);
+      });
+
+    const respondToUserInput: ProviderAdapterShape<ProviderAdapterError>["respondToUserInput"] =
+      Effect.fn("PiAdapter.respondToUserInput")(function* (threadId, requestId, answers) {
+        const context = yield* requireContext(threadId);
+        const state = context.pendingExtensionUi.get(requestId);
+        if (!state || state.pending.kind !== "user-input") {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "extension_ui_response",
+            detail: `Unknown pending Pi user-input request: ${requestId}`,
+          });
+        }
+        if (!piUserInputResponse(state.pending, answers)) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "respondToUserInput",
+            issue: `Pi request '${requestId}' requires one string answer for '${state.pending.questionId}'.`,
+          });
+        }
+        yield* settleExtensionUiState(context, state, { kind: "user-input", answers }, true);
+      });
 
     yield* Effect.addFinalizer(() =>
       Effect.forEach([...sessions.values()], closeContext, {
         concurrency: "unbounded",
         discard: true,
-      }).pipe(Effect.ensuring(Queue.shutdown(events))),
+      }).pipe(
+        Effect.ensuring(
+          Effect.all([Queue.shutdown(events), Queue.shutdown(workflowScans)], {
+            discard: true,
+          }),
+        ),
+      ),
     );
 
     return {
@@ -803,8 +1128,8 @@ export function makePiAdapter(settings: PiSettings, options?: PiAdapterOptions) 
       startSession,
       sendTurn,
       interruptTurn,
-      respondToRequest: () => unsupportedRequest("respondToRequest"),
-      respondToUserInput: () => unsupportedRequest("respondToUserInput"),
+      respondToRequest,
+      respondToUserInput,
       stopSession: (threadId) =>
         requireContext(threadId).pipe(Effect.flatMap(closeContext), Effect.asVoid),
       listSessions: () =>

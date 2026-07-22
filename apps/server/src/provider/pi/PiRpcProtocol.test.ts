@@ -140,6 +140,28 @@ describe("Pi RPC envelopes", () => {
     });
   });
 
+  it("rejects malformed extension UI fields instead of widening Pi's contract", () => {
+    expect(
+      decodePiRpcOutputRecord({
+        type: "extension_ui_request",
+        id: "bad-select",
+        method: "select",
+        title: "Choose",
+        options: ["valid", 42],
+      }),
+    ).toMatchObject({ ok: false, error: { code: "invalid_event" } });
+    expect(
+      decodePiRpcOutputRecord({
+        type: "extension_ui_request",
+        id: "bad-widget",
+        method: "setWidget",
+        widgetKey: "status",
+        widgetLines: ["line"],
+        widgetPlacement: "sideways",
+      }),
+    ).toMatchObject({ ok: false, error: { code: "invalid_event" } });
+  });
+
   it("serializes one bounded LF-terminated command record", () => {
     const encoded = serializePiRpcInputRecord({
       id: "req-1",

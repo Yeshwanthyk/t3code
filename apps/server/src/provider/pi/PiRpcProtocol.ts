@@ -111,21 +111,72 @@ export interface PiRpcAgentEvent {
   readonly [key: string]: unknown;
 }
 
-export interface PiRpcExtensionUIRequest {
-  readonly type: "extension_ui_request";
-  readonly id: string;
-  readonly method:
-    | "select"
-    | "confirm"
-    | "input"
-    | "editor"
-    | "notify"
-    | "setStatus"
-    | "setWidget"
-    | "setTitle"
-    | "set_editor_text";
-  readonly [key: string]: unknown;
-}
+export type PiRpcExtensionUIRequest =
+  | {
+      readonly type: "extension_ui_request";
+      readonly id: string;
+      readonly method: "select";
+      readonly title: string;
+      readonly options: ReadonlyArray<string>;
+      readonly timeout?: number;
+    }
+  | {
+      readonly type: "extension_ui_request";
+      readonly id: string;
+      readonly method: "confirm";
+      readonly title: string;
+      readonly message: string;
+      readonly timeout?: number;
+    }
+  | {
+      readonly type: "extension_ui_request";
+      readonly id: string;
+      readonly method: "input";
+      readonly title: string;
+      readonly placeholder?: string;
+      readonly timeout?: number;
+    }
+  | {
+      readonly type: "extension_ui_request";
+      readonly id: string;
+      readonly method: "editor";
+      readonly title: string;
+      readonly prefill?: string;
+    }
+  | {
+      readonly type: "extension_ui_request";
+      readonly id: string;
+      readonly method: "notify";
+      readonly message: string;
+      readonly notifyType?: "info" | "warning" | "error";
+    }
+  | {
+      readonly type: "extension_ui_request";
+      readonly id: string;
+      readonly method: "setStatus";
+      readonly statusKey: string;
+      readonly statusText?: string;
+    }
+  | {
+      readonly type: "extension_ui_request";
+      readonly id: string;
+      readonly method: "setWidget";
+      readonly widgetKey: string;
+      readonly widgetLines?: ReadonlyArray<string>;
+      readonly widgetPlacement?: "aboveEditor" | "belowEditor";
+    }
+  | {
+      readonly type: "extension_ui_request";
+      readonly id: string;
+      readonly method: "setTitle";
+      readonly title: string;
+    }
+  | {
+      readonly type: "extension_ui_request";
+      readonly id: string;
+      readonly method: "set_editor_text";
+      readonly text: string;
+    };
 
 export type PiRpcEvent = PiRpcAgentEvent | PiRpcExtensionUIRequest;
 export type PiRpcOutputRecord = PiRpcResponse | PiRpcEvent;
@@ -304,22 +355,49 @@ function validateExtensionUIRequest(record: Record<string, unknown>): string | n
   }
   switch (record.method) {
     case "select":
-      return typeof record.title === "string" && hasArray(record, "options")
+      return typeof record.title === "string" &&
+        Array.isArray(record.options) &&
+        record.options.every((option) => typeof option === "string") &&
+        (record.timeout === undefined || typeof record.timeout === "number")
         ? null
         : "select requires title and options";
     case "confirm":
-      return typeof record.title === "string" && typeof record.message === "string"
+      return typeof record.title === "string" &&
+        typeof record.message === "string" &&
+        (record.timeout === undefined || typeof record.timeout === "number")
         ? null
         : "confirm requires title and message";
     case "input":
+      return typeof record.title === "string" &&
+        (record.placeholder === undefined || typeof record.placeholder === "string") &&
+        (record.timeout === undefined || typeof record.timeout === "number")
+        ? null
+        : "input requires title and valid optional fields";
     case "editor":
-      return typeof record.title === "string" ? null : `${record.method} requires title`;
+      return typeof record.title === "string" &&
+        (record.prefill === undefined || typeof record.prefill === "string")
+        ? null
+        : "editor requires title and a valid optional prefill";
     case "notify":
-      return typeof record.message === "string" ? null : "notify requires message";
+      return typeof record.message === "string" &&
+        (record.notifyType === undefined ||
+          ["info", "warning", "error"].includes(String(record.notifyType)))
+        ? null
+        : "notify requires message and a valid optional notifyType";
     case "setStatus":
-      return typeof record.statusKey === "string" ? null : "setStatus requires statusKey";
+      return typeof record.statusKey === "string" &&
+        (record.statusText === undefined || typeof record.statusText === "string")
+        ? null
+        : "setStatus requires statusKey and a valid optional statusText";
     case "setWidget":
-      return typeof record.widgetKey === "string" ? null : "setWidget requires widgetKey";
+      return typeof record.widgetKey === "string" &&
+        (record.widgetLines === undefined ||
+          (Array.isArray(record.widgetLines) &&
+            record.widgetLines.every((line) => typeof line === "string"))) &&
+        (record.widgetPlacement === undefined ||
+          ["aboveEditor", "belowEditor"].includes(String(record.widgetPlacement)))
+        ? null
+        : "setWidget requires widgetKey and valid optional widget fields";
     case "setTitle":
       return typeof record.title === "string" ? null : "setTitle requires title";
     case "set_editor_text":

@@ -74,8 +74,12 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
       const serverConfig = yield* ServerConfig;
       const serverSettings = yield* ServerSettingsService;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const processEnvironment = mergeProviderInstanceEnvironment(environment);
       const effectiveConfig = { ...config, enabled } satisfies PiSettings;
+      const inheritedEnvironment = mergeProviderInstanceEnvironment(environment);
+      const configuredAgentDir = effectiveConfig.agentDir?.trim();
+      const processEnvironment = configuredAgentDir
+        ? { ...inheritedEnvironment, PI_CODING_AGENT_DIR: configuredAgentDir }
+        : inheritedEnvironment;
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
