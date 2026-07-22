@@ -1838,6 +1838,124 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("surfaces pending background tasks as a waiting state after turn completion", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => runtimeEvents.push(event)),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "review the plan",
+        attachments: [],
+      });
+
+      // Background shell launched mid-turn: roster snapshot + task_started.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "bg-codex",
+        tool_use_id: "tool-bg",
+        description: "Run Codex review of the plan",
+        task_type: "local_bash",
+        session_id: "sdk-session-bg",
+        uuid: "bg-task-started",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [
+          {
+            task_id: "bg-codex",
+            task_type: "local_bash",
+            description: "Run Codex review of the plan",
+          },
+        ],
+        session_id: "sdk-session-bg",
+        uuid: "bg-roster-1",
+      } as unknown as SDKMessage);
+
+      // Turn ends while the background task is still running.
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-bg",
+        uuid: "bg-result-1",
+      } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      const turnCompletedIndex = runtimeEvents.findIndex(
+        (event) => event.type === "turn.completed",
+      );
+      assert.notEqual(turnCompletedIndex, -1);
+      const waitingEvent = runtimeEvents
+        .slice(turnCompletedIndex)
+        .find(
+          (event) =>
+            event.type === "session.state.changed" && event.payload.reason === "background-tasks",
+        );
+      assert.equal(waitingEvent?.type, "session.state.changed");
+      if (waitingEvent?.type === "session.state.changed") {
+        assert.equal(waitingEvent.payload.state, "waiting");
+        assert.deepEqual(waitingEvent.payload.backgroundTasks, [
+          {
+            taskId: "bg-codex",
+            description: "Run Codex review of the plan",
+            taskType: "local_bash",
+          },
+        ]);
+      }
+
+      // The task finishing between turns drains the roster back to ready.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "bg-codex",
+        tool_use_id: "tool-bg",
+        status: "completed",
+        output_file: "/tmp/tasks/bg-codex.output",
+        session_id: "sdk-session-bg",
+        uuid: "bg-task-done",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [],
+        session_id: "sdk-session-bg",
+        uuid: "bg-roster-2",
+      } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      const drainedEvent = runtimeEvents.find(
+        (event) =>
+          event.type === "session.state.changed" &&
+          event.payload.reason === "background-tasks-drained",
+      );
+      assert.equal(drainedEvent?.type, "session.state.changed");
+      if (drainedEvent?.type === "session.state.changed") {
+        assert.equal(drainedEvent.payload.state, "ready");
+        assert.deepEqual(drainedEvent.payload.backgroundTasks, []);
+      }
+
+      runtimeEventsFiber.interruptUnsafe();
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("emits thread token usage updates from Claude task progress", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
