@@ -482,6 +482,47 @@ export function sortThreadsForSidebarV2<
   );
 }
 
+// Settled rows are history, so they order by when the work ENDED, not when
+// the thread was created or last touched. Explicit settles stamp settledAt;
+// auto-settled threads (inactivity, merged/closed PR) carry no stamp and
+// fall back to last activity so they still interleave sensibly.
+export function sortSettledThreadsForSidebarV2<
+  T extends {
+    readonly id: string;
+    readonly updatedAt: string;
+    readonly settledAt: string | null;
+    readonly latestUserMessageAt: string | null;
+  },
+>(threads: readonly T[]): T[] {
+  return [...threads].toSorted(
+    (left, right) =>
+      firstValidTimestampMs(right.settledAt, right.latestUserMessageAt, right.updatedAt) -
+        firstValidTimestampMs(left.settledAt, left.latestUserMessageAt, left.updatedAt) ||
+      left.id.localeCompare(right.id),
+  );
+}
+
+/** The timestamp a working thread's elapsed label counts from: the running
+    turn's start (request time until adoption), falling back to the session's
+    last transition when the turn projection lags behind. */
+export function resolveWorkingStartedAt(
+  thread: Pick<SidebarThreadSummary, "latestTurn" | "session">,
+): string | null {
+  const turn = thread.latestTurn;
+  if (turn && turn.completedAt === null) {
+    return turn.startedAt ?? turn.requestedAt;
+  }
+  return thread.session?.updatedAt ?? null;
+}
+
+export function formatWorkingDurationLabel(elapsedMs: number): string {
+  const seconds = Number.isFinite(elapsedMs) ? Math.max(0, Math.floor(elapsedMs / 1000)) : 0;
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
 export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
 }): ThreadStatusPill | null {

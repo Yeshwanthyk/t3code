@@ -1,4 +1,3 @@
-import { autoAnimate } from "@formkit/auto-animate";
 import { useAtomValue } from "@effect/atom-react";
 import { effectiveSettled } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
@@ -77,11 +76,13 @@ import { formatRelativeTimeLabel } from "../timestampFormat";
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import {
-  firstValidTimestampMs,
+  formatWorkingDurationLabel,
   hasUnseenCompletion,
   isTrailingDoubleClick,
   resolveAdjacentThreadId,
   resolveSidebarV2Status,
+  resolveWorkingStartedAt,
+  sortSettledThreadsForSidebarV2,
   sortThreadsForSidebarV2,
 } from "./Sidebar.logic";
 import { prStatusIndicator, resolveThreadPr } from "./ThreadStatusIndicators";
@@ -117,6 +118,33 @@ function compactSidebarTimeLabel(label: string): string {
 function threadTimeLabel(thread: SidebarThreadSummary): string {
   const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
   return compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp));
+}
+
+// Overlays the row's favicon while the jump modifier is held: hints must not
+// displace the status/time slot (holding ⌘ used to blank out "Working"), and
+// the favicon is the one element that stays legible when covered.
+function JumpHintBadge(props: { label: string }) {
+  return (
+    <span
+      aria-hidden
+      className="absolute -left-1 top-1/2 z-10 inline-flex h-5 -translate-y-1/2 items-center rounded-full border border-border/80 bg-background/95 px-1.5 font-mono text-[10px] font-medium tracking-tight text-foreground shadow-sm"
+    >
+      {props.label}
+    </span>
+  );
+}
+
+// Self-ticking so only this span re-renders each second, not the whole row.
+function WorkingDuration(props: { startedAt: string | null }) {
+  const startedMs = props.startedAt !== null ? Date.parse(props.startedAt) : Number.NaN;
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (Number.isNaN(startedMs)) return;
+    const id = window.setInterval(() => setTick((tick) => tick + 1), 1_000);
+    return () => window.clearInterval(id);
+  }, [startedMs]);
+  if (Number.isNaN(startedMs)) return null;
+  return <span className="tabular-nums">{formatWorkingDurationLabel(Date.now() - startedMs)}</span>;
 }
 
 const SidebarV2Row = memo(function SidebarV2Row(props: {
@@ -182,14 +210,19 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   // flag must not light up every historical thread as unread.
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
   const status = resolveSidebarV2Status(thread);
-  const shouldRecede = status === "ready" && !isUnread && !props.isActive && !isSelected;
+  // In-flight rows (working, or waiting on approval/input) recede like
+  // read-ready ones: prominence marks only the states that matter — done
+  // (unread completion), read (seen, still unsettled), and failed. The
+  // status label keeps its color, so waiting rows stay findable.
+  const isInFlight = status === "working" || status === "approval" || status === "input";
+  const shouldRecede =
+    (status === "ready" || isInFlight) && !isUnread && !props.isActive && !isSelected;
   const topStatus =
     status === "working"
       ? {
           label: "Working",
           icon: "working" as const,
-          className:
-            "animate-sidebar-working-text font-semibold text-blue-600 motion-reduce:animate-none dark:text-blue-400",
+          className: "text-muted-foreground/70",
         }
       : status === "approval"
         ? {
@@ -352,10 +385,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               "line-clamp-2 break-words",
               isUnread
                 ? "font-semibold text-foreground"
-                : status !== "ready"
-                  ? "font-semibold text-foreground/95"
-                  : shouldRecede
-                    ? "font-normal text-muted-foreground/75"
+                : shouldRecede
+                  ? "font-normal text-muted-foreground/75"
+                  : status === "failed"
+                    ? "font-semibold text-foreground/95"
                     : "font-medium text-foreground/90",
             )
           : cn(
@@ -415,18 +448,21 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
         >
           {/* Settled history recedes: dimmed favicon at rest, restored on
               hover so the tail stays scannable when you're hunting. */}
-          <span
-            className={cn(
-              "shrink-0 transition-opacity",
-              !props.isActive &&
-                "opacity-40 grayscale group-hover/v2-row:opacity-100 group-hover/v2-row:grayscale-0",
-            )}
-          >
-            <ProjectFavicon
-              environmentId={thread.environmentId}
-              cwd={props.projectCwd ?? ""}
-              className="size-3.5"
-            />
+          <span className="relative shrink-0">
+            <span
+              className={cn(
+                "block transition-opacity",
+                !props.isActive &&
+                  "opacity-40 grayscale group-hover/v2-row:opacity-100 group-hover/v2-row:grayscale-0",
+              )}
+            >
+              <ProjectFavicon
+                environmentId={thread.environmentId}
+                cwd={props.projectCwd ?? ""}
+                className="size-3.5"
+              />
+            </span>
+            {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
           </span>
           {title}
           {/* The PR badge stays outside the hover-fading slot: it must
@@ -435,12 +471,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
           {prBadge}
           <span className="relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end">
             <span className="inline-flex justify-end tabular-nums text-muted-foreground/40 transition-opacity group-hover/v2-row:opacity-0">
-              <span className="text-[13px]">
-                {props.jumpLabel ??
-                  compactSidebarTimeLabel(
-                    formatRelativeTimeLabel(thread.latestUserMessageAt ?? thread.updatedAt),
-                  )}
-              </span>
+              <span className="text-[13px]">{threadTimeLabel(thread)}</span>
             </span>
             {!props.settlementSupported ? null : variantAction === "unsettle" ? (
               <button
@@ -490,6 +521,11 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               : shouldRecede
                 ? "bg-foreground/[0.025] hover:bg-accent/45 dark:bg-white/[0.025]"
                 : "bg-foreground/[0.035] hover:bg-accent/65 dark:bg-white/[0.035]",
+          // In-flight work fades as a whole: hover restores it for reading.
+          isInFlight &&
+            !props.isActive &&
+            !isSelected &&
+            "opacity-70 transition-opacity hover:opacity-100",
         )}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
@@ -498,16 +534,19 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
       >
         <div className="relative z-10 px-2.5 py-2">
           <div className="flex h-5 min-w-0 items-center gap-1.5">
-            <ProjectFavicon
-              environmentId={thread.environmentId}
-              cwd={props.projectCwd ?? ""}
-              className="size-3.5 shrink-0"
-            />
+            <span className="relative shrink-0">
+              <ProjectFavicon
+                environmentId={thread.environmentId}
+                cwd={props.projectCwd ?? ""}
+                className="size-3.5"
+              />
+              {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
+            </span>
             {props.projectTitle ? (
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-[13px] leading-5 text-muted-foreground/70",
-                  isUnread || status !== "ready"
+                  isUnread || status === "failed"
                     ? "font-semibold"
                     : shouldRecede
                       ? "font-normal"
@@ -521,9 +560,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
             )}
             <span className="relative ml-auto flex h-5 min-w-8 shrink-0 items-center justify-end pl-1 text-[13px]">
               <span className="tabular-nums text-muted-foreground/55 transition-opacity group-hover/v2-row:opacity-0">
-                {props.jumpLabel ? (
-                  props.jumpLabel
-                ) : topStatus ? (
+                {topStatus ? (
                   <span
                     role="status"
                     className={cn(
@@ -532,11 +569,17 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                     )}
                   >
                     {topStatus.icon === "working" ? (
-                      <CircleDashedIcon aria-hidden className="size-3" />
+                      <CircleDashedIcon
+                        aria-hidden
+                        className="size-3 animate-spin [animation-duration:3s] motion-reduce:animate-none"
+                      />
                     ) : topStatus.icon === "done" ? (
                       <CircleCheckIcon aria-hidden className="size-3" />
                     ) : null}
                     {topStatus.label}
+                    {status === "working" ? (
+                      <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
+                    ) : null}
                   </span>
                 ) : (
                   threadTimeLabel(thread)
@@ -571,21 +614,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 <span className="text-red-600 dark:text-red-400">−{diff.deletions}</span>
               </span>
             ) : null}
+            {/* Cloud sits left of the harness icon: the harness is the
+                trailing anchor on every row, so an optional cloud must not
+                shift it between remote and local threads. */}
             <span className="ml-auto inline-flex shrink-0 items-center gap-1">
-              {driverKind ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={<span className="inline-flex shrink-0 items-center opacity-60" />}
-                  >
-                    <ProviderInstanceIcon
-                      driverKind={driverKind}
-                      displayName={thread.session?.providerName ?? modelInstanceId}
-                      iconClassName="size-3"
-                    />
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">{thread.modelSelection.model}</TooltipPopup>
-                </Tooltip>
-              ) : null}
               {isRemote ? (
                 <Tooltip>
                   <TooltipTrigger
@@ -598,6 +630,20 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   <TooltipPopup side="top">
                     Running on {props.environmentLabel ?? "a remote environment"}
                   </TooltipPopup>
+                </Tooltip>
+              ) : null}
+              {driverKind ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={<span className="inline-flex shrink-0 items-center opacity-60" />}
+                  >
+                    <ProviderInstanceIcon
+                      driverKind={driverKind}
+                      displayName={thread.session?.providerName ?? modelInstanceId}
+                      iconClassName="size-3"
+                    />
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{thread.modelSelection.model}</TooltipPopup>
                 </Tooltip>
               ) : null}
             </span>
@@ -785,11 +831,7 @@ export default function SidebarV2() {
     }
     return {
       activeThreads: sortThreadsForSidebarV2(active),
-      settledThreads: settled.toSorted(
-        (left, right) =>
-          firstValidTimestampMs(right.latestUserMessageAt, right.updatedAt) -
-          firstValidTimestampMs(left.latestUserMessageAt, left.updatedAt),
-      ),
+      settledThreads: sortSettledThreadsForSidebarV2(settled),
     };
   }, [
     autoSettleAfterDays,
@@ -1302,11 +1344,6 @@ export default function SidebarV2() {
     setShowJumpHints(shouldShowJumpHintsNow);
   }, [shouldShowJumpHintsNow]);
 
-  const attachListAutoAnimateRef = useCallback((node: HTMLUListElement | null) => {
-    if (!node) return;
-    autoAnimate(node, { duration: 150, easing: "ease-out" });
-  }, []);
-
   // New thread defaults to the project you're in (active thread's project,
   // falling back to the top project) — same resolution the command palette
   // uses. The chevron menu is the explicit project picker the flat list no
@@ -1526,7 +1563,11 @@ export default function SidebarV2() {
           </SidebarGroup>
         ) : null}
         <SidebarGroup className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
-          <ul ref={attachListAutoAnimateRef} className="flex flex-col gap-px">
+          {/* No FLIP/auto-animate on the list: rows only move at lifecycle
+              transitions (settle/unsettle/create), and animating those made
+              every neighbor slide around — a jarring reshuffle, not a cue.
+              Position changes land instantly instead. */}
+          <ul className="flex flex-col gap-px">
             {orderedThreads.map((thread, threadIndex) => {
               const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
               const isSettledRow = settledThreadKeys.has(threadKey);
