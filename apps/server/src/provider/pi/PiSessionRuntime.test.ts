@@ -54,6 +54,7 @@ describe("PiSessionRuntime", () => {
           sessionFile: "/tmp/pi-resumed.jsonl",
           lastEntryId: "entry-1",
         },
+        environment: { ...process.env, PI_MOCK_LEGACY_SESSION_INFO: "1" },
       });
       const replay = yield* runtime.reconcile("entry-1");
       expect(replay.entries.map((entry) => entry.id)).toEqual(["entry-2"]);

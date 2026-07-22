@@ -69,6 +69,15 @@ process.stdin.on("data", (chunk) => {
               : command.since === "entry-1"
                 ? {
                     entries: [
+                      ...(process.env.PI_MOCK_LEGACY_SESSION_INFO === "1"
+                        ? [
+                            {
+                              type: "session_info",
+                              timestamp: "2026-01-01T00:00:00.000Z",
+                              name: "Legacy title",
+                            },
+                          ]
+                        : []),
                       {
                         type: "message",
                         id: "entry-2",

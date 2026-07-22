@@ -206,16 +206,22 @@ export const makePiSessionRuntime = Effect.fn("makePiSessionRuntime")(function* 
         detail: "Pi returned an invalid entry replay payload.",
       });
     }
-    const entries = response.data.entries.filter(
-      (entry): entry is PiEntry =>
-        isRecord(entry) && typeof entry.id === "string" && typeof entry.type === "string",
+    const invalidEntry = response.data.entries.find(
+      (entry) =>
+        !isRecord(entry) ||
+        typeof entry.type !== "string" ||
+        (typeof entry.id !== "string" && entry.type !== "session_info"),
     );
-    if (entries.length !== response.data.entries.length) {
+    if (invalidEntry !== undefined) {
       return yield* new PiRpcProcessError({
         operation: "get_entries",
         detail: "Pi returned an entry without a stable identity.",
       });
     }
+    const entries = response.data.entries.filter(
+      (entry): entry is PiEntry =>
+        isRecord(entry) && typeof entry.id === "string" && typeof entry.type === "string",
+    );
     const leafId = typeof response.data.leafId === "string" ? response.data.leafId : null;
     return {
       entries,
