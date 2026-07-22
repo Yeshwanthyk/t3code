@@ -1591,6 +1591,66 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
     }),
   );
 
+  it.effect("checkpoints the latest resume cursor before publishing turn completion", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-terminal-checkpoint");
+      const session = yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const durableCursor = {
+        version: 1,
+        sessionId: "pi-session-1",
+        sessionFile: "/tmp/pi-session-1.jsonl",
+        lastEntryId: "entry-42",
+      };
+      fanout.codex.updateSession(threadId, (current) => ({
+        ...current,
+        status: "ready",
+        resumeCursor: durableCursor,
+        updatedAt: "2026-01-01T00:00:01.000Z",
+      }));
+
+      const observedBinding = yield* Ref.make<
+        Option.Option<ProviderSessionDirectory.ProviderRuntimeBinding>
+      >(Option.none());
+      const consumer = yield* Stream.runForEach(provider.streamEvents, (event) =>
+        event.type === "turn.completed" && event.threadId === threadId
+          ? directory
+              .getBinding(threadId)
+              .pipe(Effect.flatMap((binding) => Ref.set(observedBinding, binding)))
+          : Effect.void,
+      ).pipe(Effect.forkChild);
+      yield* advanceTestClock(50);
+
+      fanout.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-terminal-checkpoint"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:01.000Z",
+        threadId: session.threadId,
+        turnId: asTurnId("turn-terminal-checkpoint"),
+        status: "completed",
+      });
+      yield* advanceTestClock(50);
+
+      const binding = yield* Ref.get(observedBinding);
+      yield* Fiber.interrupt(consumer);
+      assert.equal(Option.isSome(binding), true);
+      if (Option.isSome(binding)) {
+        assert.deepEqual(binding.value.resumeCursor, durableCursor);
+        assert.deepInclude(binding.value.runtimePayload as Record<string, unknown>, {
+          lastRuntimeEvent: "turn.completed",
+          lastRuntimeEventAt: "2026-01-01T00:00:01.000Z",
+        });
+      }
+    }),
+  );
+
   it.effect("fans out canonical runtime events in emission order", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

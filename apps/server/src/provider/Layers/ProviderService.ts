@@ -300,6 +300,54 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       ),
     );
 
+  const processAdapterRuntimeEvent = (
+    source: {
+      readonly instanceId: ProviderInstanceId;
+      readonly provider: ProviderDriverKind;
+      readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
+    },
+    event: ProviderRuntimeEvent,
+  ): Effect.Effect<void> => {
+    const checkpoint =
+      event.type === "turn.completed" || event.type === "turn.aborted"
+        ? source.adapter.listSessions().pipe(
+            Effect.flatMap((sessions) => {
+              const session = sessions.find((candidate) => candidate.threadId === event.threadId);
+              return session === undefined
+                ? Effect.void
+                : upsertSessionBinding(session, event.threadId, {
+                    lastRuntimeEvent: event.type,
+                    lastRuntimeEventAt: event.createdAt,
+                  });
+            }),
+          )
+        : Effect.void;
+
+    return checkpoint.pipe(
+      Effect.as(true),
+      Effect.catchCause((cause) =>
+        Effect.logError("Failed to checkpoint provider session before publishing terminal event", {
+          cause,
+          provider: source.provider,
+          providerInstanceId: source.instanceId,
+          threadId: event.threadId,
+          eventType: event.type,
+        }).pipe(Effect.as(false)),
+      ),
+      Effect.flatMap((checkpointed) =>
+        checkpointed
+          ? processRuntimeEvent(
+              {
+                instanceId: source.instanceId,
+                provider: source.provider,
+              },
+              event,
+            )
+          : Effect.void,
+      ),
+    );
+  };
+
   // `subscribedAdapters` is our source-of-truth for "which instance adapters
   // are currently wired into the runtime event bus". It both tracks the set
   // of live subscriptions (so `reconcileInstanceSubscriptions` can diff and
@@ -335,10 +383,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       next.set(id, adapter);
       if (previous.get(id) !== adapter) {
         yield* Stream.runForEach(adapter.streamEvents, (event) =>
-          processRuntimeEvent(
+          processAdapterRuntimeEvent(
             {
               instanceId: id,
               provider: adapter.provider,
+              adapter,
             },
             event,
           ),
