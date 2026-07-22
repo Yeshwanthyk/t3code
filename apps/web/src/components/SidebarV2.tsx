@@ -120,14 +120,22 @@ function threadTimeLabel(thread: SidebarThreadSummary): string {
   return compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp));
 }
 
-// Overlays the row's favicon while the jump modifier is held: hints must not
-// displace the status/time slot (holding ⌘ used to blank out "Working"), and
-// the favicon is the one element that stays legible when covered.
+// Settled rows read "how long ago did this wrap up", matching their sort
+// key; auto-settled threads have no stamp and fall back to last activity.
+function settledTimeLabel(thread: SidebarThreadSummary): string {
+  const timestamp = thread.settledAt ?? thread.latestUserMessageAt ?? thread.updatedAt;
+  return compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp));
+}
+
+// Floats at the row's right edge, vertically centered, while the jump
+// modifier is held. An overlay pill instead of an inline slot: the hint
+// must neither displace the status/time label (holding ⌘ used to blank
+// out "Working") nor shift any layout when it appears.
 function JumpHintBadge(props: { label: string }) {
   return (
     <span
       aria-hidden
-      className="absolute -left-1 top-1/2 z-10 inline-flex h-5 -translate-y-1/2 items-center rounded-full border border-border/80 bg-background/95 px-1.5 font-mono text-[10px] font-medium tracking-tight text-foreground shadow-sm"
+      className="absolute right-1.5 top-1/2 z-10 inline-flex h-5 -translate-y-1/2 items-center rounded-full border border-border/80 bg-background/95 px-1.5 font-mono text-[10px] font-medium tracking-tight text-foreground shadow-sm"
     >
       {props.label}
     </span>
@@ -448,21 +456,18 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
         >
           {/* Settled history recedes: dimmed favicon at rest, restored on
               hover so the tail stays scannable when you're hunting. */}
-          <span className="relative shrink-0">
-            <span
-              className={cn(
-                "block transition-opacity",
-                !props.isActive &&
-                  "opacity-40 grayscale group-hover/v2-row:opacity-100 group-hover/v2-row:grayscale-0",
-              )}
-            >
-              <ProjectFavicon
-                environmentId={thread.environmentId}
-                cwd={props.projectCwd ?? ""}
-                className="size-3.5"
-              />
-            </span>
-            {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
+          <span
+            className={cn(
+              "shrink-0 transition-opacity",
+              !props.isActive &&
+                "opacity-40 grayscale group-hover/v2-row:opacity-100 group-hover/v2-row:grayscale-0",
+            )}
+          >
+            <ProjectFavicon
+              environmentId={thread.environmentId}
+              cwd={props.projectCwd ?? ""}
+              className="size-3.5"
+            />
           </span>
           {title}
           {/* The PR badge stays outside the hover-fading slot: it must
@@ -471,7 +476,9 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
           {prBadge}
           <span className="relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end">
             <span className="inline-flex justify-end tabular-nums text-muted-foreground/40 transition-opacity group-hover/v2-row:opacity-0">
-              <span className="text-[13px]">{threadTimeLabel(thread)}</span>
+              <span className="text-[13px]">
+                {variantAction === "unsettle" ? settledTimeLabel(thread) : threadTimeLabel(thread)}
+              </span>
             </span>
             {!props.settlementSupported ? null : variantAction === "unsettle" ? (
               <button
@@ -493,6 +500,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               </button>
             )}
           </span>
+          {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
         </div>
       </li>
     );
@@ -534,14 +542,11 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
       >
         <div className="relative z-10 px-2.5 py-2">
           <div className="flex h-5 min-w-0 items-center gap-1.5">
-            <span className="relative shrink-0">
-              <ProjectFavicon
-                environmentId={thread.environmentId}
-                cwd={props.projectCwd ?? ""}
-                className="size-3.5"
-              />
-              {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
-            </span>
+            <ProjectFavicon
+              environmentId={thread.environmentId}
+              cwd={props.projectCwd ?? ""}
+              className="size-3.5 shrink-0"
+            />
             {props.projectTitle ? (
               <span
                 className={cn(
@@ -569,10 +574,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                     )}
                   >
                     {topStatus.icon === "working" ? (
-                      <CircleDashedIcon
-                        aria-hidden
-                        className="size-3 animate-spin [animation-duration:3s] motion-reduce:animate-none"
-                      />
+                      // Static on purpose: continuous compositor animations
+                      // burn CPU/GPU on 120Hz screens. The ticking elapsed
+                      // time next to it already signals liveness.
+                      <CircleDashedIcon aria-hidden className="size-3" />
                     ) : topStatus.icon === "done" ? (
                       <CircleCheckIcon aria-hidden className="size-3" />
                     ) : null}
@@ -657,6 +662,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
             </div>
           ) : null}
         </div>
+        {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
       </div>
     </li>
   );
