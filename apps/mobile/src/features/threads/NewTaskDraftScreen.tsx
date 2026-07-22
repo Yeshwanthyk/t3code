@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useFontFamily } from "../../lib/useFontFamily";
 
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, type RuntimeMode } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -27,6 +27,7 @@ import { ProviderIcon } from "../../components/ProviderIcon";
 import { ComposerSurface } from "./ThreadComposer";
 
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
+import { compatibleRuntimeMode } from "../../lib/providerCapabilities";
 import { convertPastedImagesToAttachments, pickComposerImages } from "../../lib/composerImages";
 import {
   applyProviderOptionMenuEvent,
@@ -570,6 +571,12 @@ export function NewTaskDraftScreen(props: {
       }),
     [flow.selectedModel?.options, flow.selectedModelOption?.capabilities],
   );
+  useEffect(() => {
+    const compatibleMode = compatibleRuntimeMode(flow.runtimeMode, flow.allowedRuntimeModes);
+    if (compatibleMode !== null && compatibleMode !== flow.runtimeMode) {
+      flow.setRuntimeMode(compatibleMode);
+    }
+  }, [flow.allowedRuntimeModes, flow.runtimeMode, flow.setRuntimeMode]);
 
   const optionsMenuActions = useMemo(
     () => [
@@ -587,14 +594,20 @@ export function NewTaskDraftScreen(props: {
           { id: "options:runtime:approval-required", title: "Approve actions" },
           { id: "options:runtime:auto-accept-edits", title: "Auto-accept edits" },
           { id: "options:runtime:full-access", title: "Full access" },
-        ].map((option) => {
-          const value = option.id.replace("options:runtime:", "");
-          return {
-            id: option.id,
-            title: option.title,
-            state: flow.runtimeMode === value ? ("on" as const) : undefined,
-          };
-        }),
+        ]
+          .filter((option) =>
+            flow.allowedRuntimeModes.includes(
+              option.id.replace("options:runtime:", "") as RuntimeMode,
+            ),
+          )
+          .map((option) => {
+            const value = option.id.replace("options:runtime:", "");
+            return {
+              id: option.id,
+              title: option.title,
+              state: flow.runtimeMode === value ? ("on" as const) : undefined,
+            };
+          }),
       },
       {
         id: "options-interaction",
@@ -613,7 +626,7 @@ export function NewTaskDraftScreen(props: {
         }),
       },
     ],
-    [flow.interactionMode, flow.runtimeMode, providerOptionDescriptors],
+    [flow.allowedRuntimeModes, flow.interactionMode, flow.runtimeMode, providerOptionDescriptors],
   );
 
   const workspaceMenuActions = useMemo(() => {

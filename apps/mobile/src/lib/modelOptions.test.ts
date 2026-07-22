@@ -5,6 +5,25 @@ import { ProviderInstanceId, type ServerConfig } from "@t3tools/contracts";
 import { buildModelOptions } from "./modelOptions";
 
 describe("mobile model options", () => {
+  it("presents Pi as a named provider", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "pi",
+          driver: "pi",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          models: [
+            { slug: "anthropic/claude", name: "Claude", isCustom: false, capabilities: null },
+          ],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    expect(buildModelOptions(config, null)[0]?.providerLabel).toBe("Pi");
+  });
+
   it("normalizes a legacy fallback selection against current capabilities", () => {
     const config = {
       providers: [

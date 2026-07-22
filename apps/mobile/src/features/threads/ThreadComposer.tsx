@@ -30,6 +30,10 @@ import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanim
 import { useThemeColor } from "../../lib/useThemeColor";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { scopedThreadKey } from "../../lib/scopedEntities";
+import {
+  allowedRuntimeModesForProvider,
+  compatibleRuntimeMode,
+} from "../../lib/providerCapabilities";
 
 import { AppText as Text } from "../../components/AppText";
 import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
@@ -321,6 +325,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       ) ?? null
     );
   }, [props.serverConfig, props.selectedThread.modelSelection.instanceId]);
+  const allowedRuntimeModes = useMemo(
+    () => allowedRuntimeModesForProvider(selectedProviderStatus),
+    [selectedProviderStatus],
+  );
+  useEffect(() => {
+    const compatibleMode = compatibleRuntimeMode(currentRuntimeMode, allowedRuntimeModes);
+    if (compatibleMode !== null && compatibleMode !== currentRuntimeMode) {
+      props.onUpdateRuntimeMode(compatibleMode);
+    }
+  }, [allowedRuntimeModes, currentRuntimeMode, props.onUpdateRuntimeMode]);
 
   // ── Trigger detection ────────────────────────────────────
   const [composerSelection, setComposerSelection] = useState(() => ({
@@ -632,14 +646,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           { id: "options:runtime:approval-required", title: "Approve actions" },
           { id: "options:runtime:auto-accept-edits", title: "Auto-accept edits" },
           { id: "options:runtime:full-access", title: "Full access" },
-        ].map((option) => {
-          const value = option.id.replace("options:runtime:", "");
-          return {
-            id: option.id,
-            title: option.title,
-            state: currentRuntimeMode === value ? ("on" as const) : undefined,
-          };
-        }),
+        ]
+          .filter((option) =>
+            allowedRuntimeModes.includes(option.id.replace("options:runtime:", "") as RuntimeMode),
+          )
+          .map((option) => {
+            const value = option.id.replace("options:runtime:", "");
+            return {
+              id: option.id,
+              title: option.title,
+              state: currentRuntimeMode === value ? ("on" as const) : undefined,
+            };
+          }),
       },
       {
         id: "options-interaction",
@@ -658,7 +676,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         }),
       },
     ],
-    [currentInteractionMode, currentRuntimeMode, providerOptionDescriptors],
+    [allowedRuntimeModes, currentInteractionMode, currentRuntimeMode, providerOptionDescriptors],
   );
 
   // ── Menu handlers ────────────────────────────────────────

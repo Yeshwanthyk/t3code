@@ -23,6 +23,7 @@ import type { TurnCommandMetadata } from "../../lib/commandMetadata";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
+import { allowedRuntimeModesForProvider } from "../../lib/providerCapabilities";
 import { groupProjectsByRepository } from "../../lib/repositoryGroups";
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -125,6 +126,7 @@ type NewTaskFlowContextValue = {
   readonly branchesLoading: boolean;
   readonly availableBranches: ReadonlyArray<VcsRef>;
   readonly runtimeMode: RuntimeMode;
+  readonly allowedRuntimeModes: ReadonlyArray<RuntimeMode>;
   readonly interactionMode: ProviderInteractionMode;
   readonly expandedProvider: string | null;
   readonly environments: ReadonlyArray<{
@@ -391,12 +393,20 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         option.selection.instanceId === selectedModel.instanceId &&
         option.selection.model === selectedModel.model,
     ) ?? null;
-  const selectedProviderSkills = useMemo(
+  const selectedProviderStatus = useMemo(
     () =>
       selectedEnvironmentServerConfig?.providers.find(
         (provider) => provider.instanceId === selectedModel?.instanceId,
-      )?.skills ?? [],
+      ) ?? null,
     [selectedEnvironmentServerConfig, selectedModel?.instanceId],
+  );
+  const selectedProviderSkills = useMemo(
+    () => selectedProviderStatus?.skills ?? [],
+    [selectedProviderStatus],
+  );
+  const allowedRuntimeModes = useMemo(
+    () => allowedRuntimeModesForProvider(selectedProviderStatus),
+    [selectedProviderStatus],
   );
   const setSelectedModelKey = useCallback(
     (key: string | null) => {
@@ -838,6 +848,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       branchesLoading,
       availableBranches,
       runtimeMode,
+      allowedRuntimeModes,
       interactionMode,
       expandedProvider,
       environments,
@@ -874,6 +885,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     }),
     [
       attachments,
+      allowedRuntimeModes,
       availableBranches,
       beginEditingPendingTask,
       branchQuery,

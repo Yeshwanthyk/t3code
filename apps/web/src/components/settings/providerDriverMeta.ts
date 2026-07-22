@@ -3,15 +3,43 @@ import {
   CodexSettings,
   CursorSettings,
   GrokSettings,
+  makeProviderSettingsSchema,
   OpenCodeSettings,
   ProviderDriverKind,
 } from "@t3tools/contracts";
-import type * as Schema from "effect/Schema";
-import { ClaudeAI, CursorIcon, GrokIcon, type Icon, OpenAI, OpenCodeIcon } from "../Icons";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import {
+  ClaudeAI,
+  CursorIcon,
+  GrokIcon,
+  type Icon,
+  OpenAI,
+  OpenCodeIcon,
+  PiAgentIcon,
+} from "../Icons";
 
 type ProviderSettingsSchema = {
   readonly fields: Readonly<Record<string, Schema.Top>>;
 } & Schema.Top;
+
+const PiSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: Schema.String.pipe(
+      Schema.withDecodingDefault(Effect.succeed("pi")),
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Pi binary used by this instance.",
+        providerSettingsForm: { placeholder: "pi", clearWhenEmpty: "omit" },
+      }),
+    ),
+  },
+  { order: ["binaryPath"] },
+);
 
 /**
  * Browser-safe provider definition. This is deliberately shaped like the
@@ -66,6 +94,13 @@ export const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = 
     label: "OpenCode",
     icon: OpenCodeIcon,
     settingsSchema: OpenCodeSettings,
+  },
+  {
+    value: ProviderDriverKind.make("pi"),
+    label: "Pi",
+    icon: PiAgentIcon,
+    badgeLabel: "Early Access",
+    settingsSchema: PiSettings,
   },
 ];
 
