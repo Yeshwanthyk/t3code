@@ -1956,6 +1956,83 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("drops the background-task roster when a turn fails", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => runtimeEvents.push(event)),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "kick off a background task",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [{ task_id: "bg-doomed", task_type: "local_bash", description: "Long job" }],
+        session_id: "sdk-session-fail",
+        uuid: "fail-roster-1",
+      } as unknown as SDKMessage);
+
+      // The turn fails; the roster is no longer trustworthy and a stale
+      // entry must not resurface as a waiting state after later activity.
+      harness.query.emit({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["boom"],
+        session_id: "sdk-session-fail",
+        uuid: "fail-result-1",
+      } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      // A terminal notification for the doomed task between turns must
+      // report ready (empty roster), not a waiting state with stale tasks.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "bg-doomed",
+        tool_use_id: "tool-doomed",
+        status: "stopped",
+        session_id: "sdk-session-fail",
+        uuid: "fail-task-done",
+      } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      const waitingEvents = runtimeEvents.filter(
+        (event) =>
+          event.type === "session.state.changed" && event.payload.reason === "background-tasks",
+      );
+      assert.deepEqual(waitingEvents, []);
+      const drained = runtimeEvents.find(
+        (event) =>
+          event.type === "session.state.changed" &&
+          event.payload.reason === "background-tasks-drained",
+      );
+      assert.equal(drained?.type, "session.state.changed");
+      if (drained?.type === "session.state.changed") {
+        assert.deepEqual(drained.payload.backgroundTasks, []);
+      }
+
+      runtimeEventsFiber.interruptUnsafe();
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("emits thread token usage updates from Claude task progress", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

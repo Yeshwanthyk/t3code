@@ -1339,6 +1339,13 @@ const make = Effect.gen(function* () {
           case "session.started":
           case "thread.started":
             return true;
+          case "session.state.changed":
+            // Background-task roster events are only meaningful between
+            // turns: they map to a "ready" status, so applying a stale or
+            // replayed one mid-turn would null the active turn and settle a
+            // genuinely running turn. The turn lifecycle already clears
+            // pendingBackgroundTasks when a turn starts.
+            return event.payload.backgroundTasks === undefined || activeTurnId === null;
           case "turn.started":
             return !conflictsWithActiveTurn || conflictingTurnStartIsPendingTurnStart;
           case "turn.completed":

@@ -535,6 +535,59 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.pendingBackgroundTasks).toBeUndefined();
   });
 
+  it("ignores stale background-task roster events while a turn is active", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-bg-race-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-race"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.status === "running" && entry.session?.activeTurnId === "turn-race",
+    );
+
+    // A delayed/replayed roster event must not settle the running turn.
+    harness.emit({
+      type: "session.state.changed",
+      eventId: asEventId("evt-bg-race-roster"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      payload: {
+        state: "waiting",
+        reason: "background-tasks",
+        backgroundTasks: [{ taskId: "bg-stale" }],
+      },
+    });
+    // A non-roster state change is still applied; use it as the sync point to
+    // know the roster event has been processed (events are handled in order).
+    harness.emit({
+      type: "session.state.changed",
+      eventId: asEventId("evt-bg-race-running"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      payload: {
+        state: "running",
+        reason: "still-working",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.lastError === null && entry.session?.status === "running",
+    );
+    expect(thread.session?.status).toBe("running");
+    expect(thread.session?.activeTurnId).toBe("turn-race");
+    expect(thread.session?.pendingBackgroundTasks).toBeUndefined();
+  });
+
   it("clears active turn when provider session becomes ready", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

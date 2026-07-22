@@ -2139,6 +2139,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         rawMethod: "claude/result",
         rawPayload: result ?? { status },
       });
+    } else if (status !== "completed") {
+      // A failed or interrupted turn leaves the roster untrustworthy (terminal
+      // task notifications or the authoritative empty snapshot may never
+      // arrive), and stale entries would resurface as a bogus waiting state
+      // after a later turn. Drop it; the next background_tasks_changed
+      // snapshot rebuilds it from scratch.
+      context.backgroundTasks.clear();
     }
   });
 
