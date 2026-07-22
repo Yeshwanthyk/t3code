@@ -128,6 +128,11 @@ describe("PiWorkflowWatcher", () => {
       issues: [{ runId, code: "terminal_regression" }],
       snapshots: [{ runId, status: "aborted" }],
     });
+    expect(watcher.scan()).toMatchObject({
+      changes: [],
+      issues: [],
+      snapshots: [{ runId, status: "aborted" }],
+    });
   });
 
   it("reconstructs terminal details as a fresh change after restart", () => {

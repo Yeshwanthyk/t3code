@@ -76,6 +76,7 @@ export class PiWorkflowWatcher {
   readonly #watchFactory: NonNullable<PiWorkflowWatcherOptions["watchFactory"]>;
   readonly #pollFactory: NonNullable<PiWorkflowWatcherOptions["pollFactory"]>;
   readonly #snapshots = new Map<string, PiWorkflowArtifactSnapshot>();
+  readonly #lastIssues = new Map<string, string>();
   #stopWatching: (() => void) | undefined;
 
   constructor(options: PiWorkflowWatcherOptions) {
@@ -107,13 +108,22 @@ export class PiWorkflowWatcher {
       const previous = this.#snapshots.get(runId);
       const result = this.#reader.read(runId);
       if (result.kind === "unavailable") {
-        issues.push({ runId, ...result.issue });
+        const fingerprint = `${result.issue.code}:${result.issue.message}`;
+        if (this.#lastIssues.get(runId) !== fingerprint) {
+          issues.push({ runId, ...result.issue });
+          this.#lastIssues.set(runId, fingerprint);
+        }
         continue;
       }
       if (result.kind === "stale") {
-        issues.push({ runId, ...result.issue });
+        const fingerprint = `${result.issue.code}:${result.issue.message}`;
+        if (this.#lastIssues.get(runId) !== fingerprint) {
+          issues.push({ runId, ...result.issue });
+          this.#lastIssues.set(runId, fingerprint);
+        }
         continue;
       }
+      this.#lastIssues.delete(runId);
       if (result.kind === "unchanged") {
         if (!previous) this.#snapshots.set(runId, result.snapshot);
         continue;

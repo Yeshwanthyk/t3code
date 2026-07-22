@@ -337,11 +337,12 @@ function decodeAgents(
       return undefined;
     const index = raw.index as number;
     const usage = decodeUsage(raw.usage);
+    const queuedAt = raw.queuedAt ?? raw.startedAt;
     if (
       seen.has(index) ||
       !isNonEmptyString(raw.label) ||
       !AGENT_STATES.has(raw.state as PiWorkflowAgentState) ||
-      !isTimestamp(raw.queuedAt) ||
+      !isTimestamp(queuedAt) ||
       typeof raw.preview !== "string" ||
       !usage
     ) {
@@ -363,7 +364,7 @@ function decodeAgents(
       index,
       label: raw.label,
       state: raw.state as PiWorkflowAgentState,
-      queuedAt: raw.queuedAt,
+      queuedAt,
       preview: raw.preview,
       usage,
       transcript: transcripts.get(index) ?? [],

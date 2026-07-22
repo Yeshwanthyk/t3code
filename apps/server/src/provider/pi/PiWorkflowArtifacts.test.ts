@@ -49,7 +49,6 @@ function workflowValue(input: {
         state: status === "running" ? "running" : status === "completed" ? "done" : "error",
         model: "provider/model",
         thinkingLevel: "high",
-        queuedAt: startedAt,
         startedAt,
         ...(status === "running" ? {} : { finishedAt: startedAt + 10 }),
         preview: "reading",
@@ -128,7 +127,7 @@ describe("PiWorkflowArtifactReader", () => {
         status: "running",
         result: { answer: 42 },
         scriptText: "export default await agent('inspect')\n",
-        agents: [{ transcript: [{ role: "user" }, { role: "toolResult" }] }],
+        agents: [{ queuedAt: 10, transcript: [{ role: "user" }, { role: "toolResult" }] }],
       },
     });
     expect(reader.read("wf_0123456789ab")).toMatchObject({ kind: "unchanged" });
