@@ -1,0 +1,17 @@
+{"id":"req-model","type":"response","command":"set_model","success":true,"data":{"provider":"provider-redacted","id":"model-redacted","input":["text","image"]}}
+{"id":"req-thinking","type":"response","command":"set_thinking_level","success":true}
+{"id":"req-thinking-state","type":"response","command":"get_state","success":true,"data":{"model":{"provider":"provider-redacted","id":"model-redacted","input":["text","image"]},"thinkingLevel":"high","isStreaming":false,"isCompacting":false,"steeringMode":"all","followUpMode":"one-at-a-time","sessionFile":"/redacted/pi/sessions/session-a.jsonl","sessionId":"session-a","autoCompactionEnabled":true,"messageCount":2,"pendingMessageCount":0}}
+{"id":"req-commands","type":"response","command":"get_commands","success":true,"data":{"commands":[{"name":"skill:redacted","description":"Redacted skill","source":"skill","sourceInfo":{"path":"/redacted/SKILL.md"}}]}}
+{"type":"extension_ui_request","id":"ui-select","method":"select","title":"Choose","options":["Allow","Block"],"timeout":10000}
+{"type":"extension_ui_request","id":"ui-confirm","method":"confirm","title":"Confirm","message":"Continue?","timeout":5000}
+{"type":"extension_ui_request","id":"ui-input","method":"input","title":"Value","placeholder":"redacted"}
+{"type":"extension_ui_request","id":"ui-editor","method":"editor","title":"Edit","prefill":"redacted"}
+{"type":"extension_ui_request","id":"ui-notify","method":"notify","message":"notice","notifyType":"info"}
+{"type":"extension_ui_request","id":"ui-status","method":"setStatus","statusKey":"redacted","statusText":"running"}
+{"type":"extension_ui_request","id":"ui-widget","method":"setWidget","widgetKey":"redacted","widgetLines":["line"],"widgetPlacement":"aboveEditor"}
+{"type":"extension_ui_request","id":"ui-title","method":"setTitle","title":"redacted"}
+{"type":"extension_ui_request","id":"ui-editor-text","method":"set_editor_text","text":"redacted"}
+{"id":"req-abort","type":"response","command":"abort","success":true}
+{"type":"message_update","message":{"role":"assistant","content":[],"stopReason":"aborted"},"assistantMessageEvent":{"type":"error","reason":"aborted","error":{"message":"aborted"},"partial":{"role":"assistant"}}}
+{"type":"agent_end","messages":[],"willRetry":false}
+{"type":"agent_settled"}

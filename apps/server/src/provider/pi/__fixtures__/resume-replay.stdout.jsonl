@@ -1,0 +1,4 @@
+{"id":"req-switch-cancelled","type":"response","command":"switch_session","success":true,"data":{"cancelled":true}}
+{"id":"req-switch","type":"response","command":"switch_session","success":true,"data":{"cancelled":false}}
+{"id":"req-state","type":"response","command":"get_state","success":true,"data":{"model":{"provider":"provider-redacted","id":"model-redacted","input":["text"]},"thinkingLevel":"low","isStreaming":false,"isCompacting":false,"steeringMode":"all","followUpMode":"one-at-a-time","sessionFile":"/redacted/pi/sessions/session-a.jsonl","sessionId":"session-a","autoCompactionEnabled":true,"messageCount":2,"pendingMessageCount":0}}
+{"id":"req-entries","type":"response","command":"get_entries","success":true,"data":{"entries":[{"type":"message","id":"entry-2","parentId":"entry-1","timestamp":"2026-07-22T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"replayed text"}]}}],"leafId":"entry-2"}}
