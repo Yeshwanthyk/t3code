@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
-import { ProviderRuntimeEvent } from "./providerRuntime.ts";
+import { ProviderRuntimeEvent, RuntimeEventRaw } from "./providerRuntime.ts";
 
 const decodeRuntimeEvent = Schema.decodeUnknownSync(ProviderRuntimeEvent);
+const decodeRuntimeEventRaw = Schema.decodeUnknownSync(RuntimeEventRaw);
 
 describe("ProviderRuntimeEvent", () => {
+  it("accepts Pi RPC records as provider-native raw evidence", () => {
+    const parsed = decodeRuntimeEventRaw({
+      source: "pi.rpc",
+      method: "message_update",
+      payload: { type: "text_delta", delta: "hello" },
+    });
+
+    expect(parsed.source).toBe("pi.rpc");
+  });
+
   it("accepts fork-provided driver kinds as branded slugs", () => {
     const parsed = decodeRuntimeEvent({
       type: "session.started",
